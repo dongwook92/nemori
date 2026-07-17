@@ -4,7 +4,7 @@ from __future__ import annotations
 import tiktoken
 
 
-def estimate_tokens(text: str, model: str = "gpt-4o-mini") -> int:
+def estimate_tokens(text: str, model: str = "qwen3.6-27b-fp8") -> int:
     """Estimate token count for a given text."""
     try:
         encoding = tiktoken.encoding_for_model(model)

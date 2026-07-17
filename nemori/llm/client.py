@@ -28,17 +28,34 @@ class AsyncLLMClient:
         self, messages: list[dict], **kwargs: Any
     ) -> tuple[str, dict[str, int]]:
         """Return (content, {"prompt_tokens": ..., "completion_tokens": ...})."""
-        model = kwargs.pop("model", "gpt-4o-mini")
+        model = kwargs.pop("model", "qwen3.6-27b-fp8")
         temperature = kwargs.pop("temperature", 0.7)
         max_tokens = kwargs.pop("max_tokens", 2000)
         typed_messages = cast(list[ChatCompletionMessageParam], messages)
+        if model == "qwen3.6-27b-fp8":
+            kwargs.setdefault("top_p", 0.8)
+            kwargs.setdefault("presence_penalty", 1.5)
+            kwargs.setdefault(
+                "extra_body",
+                {
+                    "top_k": 20,
+                    "min_p": 0.0,
+                    "repetition_penalty": 1.0,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+            )
+        token_limit = (
+            {"max_completion_tokens": max_tokens}
+            if model.startswith("gpt-5")
+            else {"max_tokens": max_tokens}
+        )
 
         try:
             response = await self._client.chat.completions.create(
                 model=model,
                 messages=typed_messages,
                 temperature=temperature,
-                max_tokens=max_tokens,
+                **token_limit,
                 **kwargs,
             )
             content = response.choices[0].message.content or ""

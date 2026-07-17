@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 
 def _resolve_llm_key() -> str:
@@ -21,6 +22,16 @@ def _resolve_embedding_key() -> str:
         or os.getenv("OPENAI_API_KEY")
         or ""
     )
+
+
+def _resolve_embedding_headers() -> dict[str, str] | None:
+    modal_key = os.getenv("MODAL_PROXY_AUTH_TOKEN_ID")
+    modal_secret = os.getenv("MODAL_PROXY_AUTH_TOKEN_SECRET")
+    base_url = os.getenv("EMBEDDING_BASE_URL") or ""
+    hostname = urlparse(base_url).hostname or ""
+    if modal_key and modal_secret and hostname.endswith(".modal.run"):
+        return {"Modal-Key": modal_key, "Modal-Secret": modal_secret}
+    return None
 
 
 def _resolve_dsn() -> str:
@@ -48,7 +59,7 @@ class MemoryConfig:
     agent_id: str = "default"
 
     # LLM
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "qwen3.6-27b-fp8"
     llm_api_key: str = field(default_factory=_resolve_llm_key)
     llm_base_url: str | None = field(default_factory=lambda: _resolve_base_url("LLM_BASE_URL"))
     llm_max_concurrent: int = 10
@@ -57,9 +68,15 @@ class MemoryConfig:
     llm_token_budget: int | None = None
 
     # Embedding
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = field(
+        default_factory=lambda: os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
+    )
     embedding_api_key: str = field(default_factory=_resolve_embedding_key)
     embedding_base_url: str | None = field(default_factory=lambda: _resolve_base_url("EMBEDDING_BASE_URL"))
+    embedding_headers: dict[str, str] | None = field(
+        default_factory=_resolve_embedding_headers,
+        repr=False,
+    )
     embedding_dimension: int = 1536
 
     # Qdrant

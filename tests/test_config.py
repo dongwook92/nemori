@@ -10,7 +10,7 @@ def test_default_config():
     assert cfg.db_pool_min == 5
     assert cfg.db_pool_max == 20
     assert cfg.agent_id == "default"
-    assert cfg.llm_model == "gpt-4o-mini"
+    assert cfg.llm_model == "qwen3.6-27b-fp8"
     assert cfg.embedding_model == "text-embedding-3-small"
     assert cfg.embedding_dimension == 1536
     assert cfg.buffer_size_min == 2
@@ -21,6 +21,29 @@ def test_config_reads_env_for_llm_api_key(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "test-key-123")
     cfg = MemoryConfig()
     assert cfg.llm_api_key == "test-key-123"
+
+
+def test_config_reads_embedding_model_and_modal_headers(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_MODEL", "ixi-embedding-v1")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://example.modal.run/v1")
+    monkeypatch.setenv("MODAL_PROXY_AUTH_TOKEN_ID", "modal-key")
+    monkeypatch.setenv("MODAL_PROXY_AUTH_TOKEN_SECRET", "modal-secret")
+
+    cfg = MemoryConfig()
+
+    assert cfg.embedding_model == "ixi-embedding-v1"
+    assert cfg.embedding_headers == {
+        "Modal-Key": "modal-key",
+        "Modal-Secret": "modal-secret",
+    }
+
+
+def test_config_does_not_send_modal_headers_to_other_hosts(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+    monkeypatch.setenv("MODAL_PROXY_AUTH_TOKEN_ID", "modal-key")
+    monkeypatch.setenv("MODAL_PROXY_AUTH_TOKEN_SECRET", "modal-secret")
+
+    assert MemoryConfig().embedding_headers is None
 
 
 def test_config_falls_back_to_openai_api_key(monkeypatch):

@@ -40,6 +40,7 @@ async def create_memory_system(
         api_key=config.embedding_api_key,
         model=config.embedding_model,
         base_url=config.embedding_base_url,
+        default_headers=config.embedding_headers,
     )
     episode_gen = EpisodeGenerator(orchestrator=orchestrator, embedding=embedding)
     semantic_gen = SemanticGenerator(

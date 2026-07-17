@@ -4,6 +4,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from nemori.services.embedding import AsyncEmbeddingClient
 
 
+def test_client_passes_default_headers():
+    headers = {"Modal-Key": "modal-key", "Modal-Secret": "modal-secret"}
+
+    with patch("nemori.services.embedding.AsyncOpenAI") as mock_openai:
+        AsyncEmbeddingClient(
+            api_key="test",
+            model="ixi-embedding-v1",
+            base_url="https://example.modal.run/v1",
+            default_headers=headers,
+        )
+
+    mock_openai.assert_called_once_with(
+        api_key="test",
+        base_url="https://example.modal.run/v1",
+        default_headers=headers,
+    )
+
+
 @pytest.mark.asyncio
 async def test_embed_returns_float_list():
     client = AsyncEmbeddingClient(api_key="test", model="text-embedding-3-small")

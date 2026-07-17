@@ -17,8 +17,13 @@ class AsyncEmbeddingClient:
     def __init__(
         self, api_key: str, model: str = "text-embedding-3-small",
         base_url: str | None = None,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=default_headers,
+        )
         self._model = model
 
     async def embed(self, text: str) -> list[float]:

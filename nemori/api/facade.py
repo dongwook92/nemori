@@ -40,6 +40,7 @@ class NemoriMemory:
                 api_key=self._config.embedding_api_key,
                 model=self._config.embedding_model,
                 base_url=self._config.embedding_base_url,
+                default_headers=self._config.embedding_headers,
             )
             actual_dim = await embedding.probe_dimension()
             if actual_dim != self._config.embedding_dimension:
