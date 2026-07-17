@@ -127,7 +127,12 @@ class SemanticGenerator:
                 lines = text.split("\n")
                 text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
             data = json.loads(text)
-            return data.get("statements", [])
+            if not isinstance(data, dict):
+                return []
+            statements = data.get("statements", [])
+            if not isinstance(statements, list):
+                return []
+            return [statement for statement in statements if isinstance(statement, str)]
         except (json.JSONDecodeError, AttributeError):
             logger.warning("Failed to parse semantic statements")
             return []

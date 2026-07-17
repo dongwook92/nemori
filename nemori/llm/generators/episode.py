@@ -37,6 +37,7 @@ class EpisodeGenerator:
 
         has_images = any(m.has_images() for m in messages)
 
+        user_content: str | list[dict[str, Any]]
         if has_images:
             # Build multimodal content array
             user_content = self._build_multimodal_prompt(messages, boundary_reason)
@@ -90,7 +91,10 @@ class EpisodeGenerator:
         if text.startswith("```"):
             lines = text.split("\n")
             text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        return json.loads(text)
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("Episode response must be a JSON object")
+        return parsed
 
     def _build_multimodal_prompt(
         self, messages: list[Message], boundary_reason: str

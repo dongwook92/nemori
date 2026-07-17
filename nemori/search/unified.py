@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any
 
 from nemori.domain.models import Episode, SemanticMemory
-from nemori.domain.interfaces import EmbeddingProvider
+from nemori.domain.interfaces import EmbeddingProvider, EpisodeStore, SemanticStore
 from nemori.db.qdrant_store import QdrantVectorStore
 
 logger = logging.getLogger("nemori")
@@ -37,8 +37,8 @@ class UnifiedSearch:
 
     def __init__(
         self,
-        episode_store: Any,
-        semantic_store: Any,
+        episode_store: EpisodeStore,
+        semantic_store: SemanticStore,
         embedding: EmbeddingProvider,
         qdrant: QdrantVectorStore,
     ) -> None:

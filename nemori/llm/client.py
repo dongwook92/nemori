@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 from nemori.domain.exceptions import LLMError, LLMAuthError, LLMRateLimitError
 
@@ -30,11 +31,12 @@ class AsyncLLMClient:
         model = kwargs.pop("model", "gpt-4o-mini")
         temperature = kwargs.pop("temperature", 0.7)
         max_tokens = kwargs.pop("max_tokens", 2000)
+        typed_messages = cast(list[ChatCompletionMessageParam], messages)
 
         try:
             response = await self._client.chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=typed_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 **kwargs,

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import asyncpg
+import asyncpg  # type: ignore[import-untyped]
 
 from nemori.domain.exceptions import DatabaseError
 
@@ -45,12 +45,12 @@ class DatabaseManager:
     async def execute(self, query: str, *args: Any) -> str:
         pool = self._ensure_pool()
         async with pool.acquire() as conn:
-            return await conn.execute(query, *args)
+            return str(await conn.execute(query, *args))
 
     async def fetch(self, query: str, *args: Any) -> list[asyncpg.Record]:
         pool = self._ensure_pool()
         async with pool.acquire() as conn:
-            return await conn.fetch(query, *args)
+            return list(await conn.fetch(query, *args))
 
     async def fetchrow(self, query: str, *args: Any) -> asyncpg.Record | None:
         pool = self._ensure_pool()
@@ -72,7 +72,7 @@ class DatabaseManager:
             pool = self._ensure_pool()
             async with pool.acquire() as conn:
                 result = await conn.fetchval("SELECT 1")
-                return result == 1
+                return bool(result == 1)
         except DatabaseError:
             raise
         except Exception:

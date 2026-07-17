@@ -10,7 +10,7 @@ Nemori is a self-organising long-term memory substrate for agentic LLM workflows
 
 <br clear="left">
 
-- **🐍 Language:** Python 3.10+
+- **🐍 Language:** Python 3.11+ (Python 3.12 is the default development version)
 - **📜 License:** MIT
 - **📦 Key dependencies:** asyncpg, Qdrant, OpenAI SDK, Pillow
 

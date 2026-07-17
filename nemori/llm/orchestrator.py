@@ -6,6 +6,7 @@ import logging
 import random
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -40,7 +41,7 @@ class LLMRequest:
     response_format: dict[str, str] | None = None
     timeout: float = 30.0
     retries: int = 3
-    metadata: MappingProxyType = field(
+    metadata: Mapping[str, Any] = field(
         default_factory=lambda: MappingProxyType({})
     )
 

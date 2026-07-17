@@ -43,7 +43,7 @@ def compress_image_for_llm(
         b64_data = data_url
 
     img_bytes = base64.b64decode(b64_data)
-    img = Image.open(io.BytesIO(img_bytes))
+    img: Image.Image = Image.open(io.BytesIO(img_bytes))
 
     if img.mode in ("RGBA", "LA", "P"):
         background = Image.new("RGB", img.size, (255, 255, 255))
@@ -57,7 +57,7 @@ def compress_image_for_llm(
     if img.width > max_width or img.height > max_height:
         ratio = min(max_width / img.width, max_height / img.height)
         new_size = (int(img.width * ratio), int(img.height * ratio))
-        img = img.resize(new_size, Image.LANCZOS)
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality, optimize=True)

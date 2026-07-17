@@ -31,8 +31,9 @@ class EventBus:
         if pending:
             done, not_done = await asyncio.wait(pending, timeout=timeout)
             for t in done:
-                if t.exception():
-                    errors.append(t.exception())
+                error = t.exception()
+                if isinstance(error, Exception):
+                    errors.append(error)
             for t in not_done:
                 t.cancel()
         return errors

@@ -4,6 +4,10 @@ work correctly with real OpenRouter / OpenAI-compatible endpoints.
 
 Tests real API calls — requires valid API keys in .env
 """
+
+# This is an executable live-API smoke test, not part of the offline pytest suite.
+__test__ = False
+
 import asyncio
 import os
 import sys

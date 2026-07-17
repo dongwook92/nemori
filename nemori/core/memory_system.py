@@ -95,9 +95,9 @@ class MemorySystem:
 
             # Extract buffer IDs for cleanup
             buffer_ids = [
-                m.metadata.get("buffer_id")
+                buffer_id
                 for m in messages
-                if m.metadata.get("buffer_id") is not None
+                if isinstance((buffer_id := m.metadata.get("buffer_id")), int)
             ]
 
             episodes = []
