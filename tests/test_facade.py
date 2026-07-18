@@ -1,16 +1,27 @@
 """Tests for async NemoriMemory facade."""
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from nemori.api.facade import NemoriMemory
 from nemori.config import MemoryConfig
+from nemori.domain.exceptions import EmbeddingError
+
+
+@pytest.fixture(autouse=True)
+def mock_embedding_client():
+    with patch("nemori.api.facade.AsyncEmbeddingClient") as mock_client:
+        mock_client.return_value.warmup = AsyncMock(return_value=1536)
+        yield mock_client
 
 
 @pytest.mark.asyncio
 async def test_facade_context_manager():
-    with patch("nemori.api.facade.DatabaseManager") as MockDB, \
-         patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
-         patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
+    with (
+        patch("nemori.api.facade.DatabaseManager") as MockDB,
+        patch("nemori.api.facade.QdrantVectorStore") as MockQdrant,
+        patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock),
+    ):
         mock_db_instance = AsyncMock()
         MockDB.return_value = mock_db_instance
         mock_qdrant = MagicMock()
@@ -24,10 +35,61 @@ async def test_facade_context_manager():
 
 
 @pytest.mark.asyncio
+async def test_facade_warmup_adjusts_dimension_before_storage(mock_embedding_client):
+    mock_embedding_client.return_value.warmup.return_value = 1024
+
+    with (
+        patch("nemori.api.facade.DatabaseManager") as MockDB,
+        patch("nemori.api.facade.QdrantVectorStore") as MockQdrant,
+        patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock),
+    ):
+        mock_db = AsyncMock()
+        MockDB.return_value = mock_db
+        mock_qdrant = MagicMock()
+        MockQdrant.return_value = mock_qdrant
+        config = MemoryConfig(
+            dsn="postgresql://localhost/test",
+            llm_api_key="test",
+            embedding_dimension=1536,
+        )
+
+        async with NemoriMemory(config=config):
+            assert config.embedding_dimension == 1024
+
+        mock_qdrant.ensure_collections.assert_called_once_with(1024)
+        mock_embedding_client.return_value.warmup.assert_awaited_once_with(
+            timeout=60.0,
+            retries=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_facade_warmup_failure_closes_database(mock_embedding_client):
+    mock_embedding_client.return_value.warmup.side_effect = EmbeddingError("cold")
+
+    with patch("nemori.api.facade.DatabaseManager") as MockDB:
+        mock_db = AsyncMock()
+        MockDB.return_value = mock_db
+        memory = NemoriMemory(
+            config=MemoryConfig(
+                dsn="postgresql://localhost/test",
+                llm_api_key="test",
+            )
+        )
+
+        with pytest.raises(EmbeddingError, match="cold"):
+            await memory.__aenter__()
+
+        mock_db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_facade_add_messages():
-    with patch("nemori.api.facade.DatabaseManager") as MockDB, \
-         patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
-         patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
+    with (
+        patch("nemori.api.facade.DatabaseManager") as MockDB,
+        patch("nemori.api.facade.QdrantVectorStore") as MockQdrant,
+        patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock),
+    ):
         MockDB.return_value = AsyncMock()
         MockQdrant.return_value = MagicMock()
 
@@ -40,9 +102,11 @@ async def test_facade_add_messages():
 
 @pytest.mark.asyncio
 async def test_facade_health():
-    with patch("nemori.api.facade.DatabaseManager") as MockDB, \
-         patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
-         patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
+    with (
+        patch("nemori.api.facade.DatabaseManager") as MockDB,
+        patch("nemori.api.facade.QdrantVectorStore") as MockQdrant,
+        patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock),
+    ):
         mock_db = AsyncMock()
         mock_db.ping = AsyncMock(return_value=True)
         mock_db.pool = MagicMock()
@@ -59,27 +123,33 @@ async def test_facade_health():
 
 @pytest.mark.asyncio
 async def test_facade_add_messages_preserves_timestamp_and_metadata():
-    with patch("nemori.api.facade.DatabaseManager") as MockDB, \
-         patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
-         patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
+    with (
+        patch("nemori.api.facade.DatabaseManager") as MockDB,
+        patch("nemori.api.facade.QdrantVectorStore") as MockQdrant,
+        patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock),
+    ):
         MockDB.return_value = AsyncMock()
         MockQdrant.return_value = MagicMock()
 
         config = MemoryConfig(dsn="postgresql://localhost/test", llm_api_key="test")
         async with NemoriMemory(config=config) as memory:
             memory._system = AsyncMock()
-            await memory.add_messages("u1", [
-                {
-                    "role": "user",
-                    "content": "hi",
-                    "timestamp": "2023-05-08T13:56:00",
-                    "metadata": {"source": "test"},
-                }
-            ])
+            await memory.add_messages(
+                "u1",
+                [
+                    {
+                        "role": "user",
+                        "content": "hi",
+                        "timestamp": "2023-05-08T13:56:00",
+                        "metadata": {"source": "test"},
+                    }
+                ],
+            )
             memory._system.add_messages.assert_called_once()
             args = memory._system.add_messages.call_args
             msg = args[0][1][0]  # second positional arg, first message
             from datetime import datetime
+
             assert msg.timestamp == datetime(2023, 5, 8, 13, 56, 0)
             assert msg.metadata == {"source": "test"}
 
@@ -87,9 +157,11 @@ async def test_facade_add_messages_preserves_timestamp_and_metadata():
 @pytest.mark.asyncio
 async def test_add_multimodal_message_builds_content_array():
     """add_multimodal_message should build proper content array with compressed images."""
-    with patch("nemori.api.facade.DatabaseManager") as MockDB, \
-         patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
-         patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
+    with (
+        patch("nemori.api.facade.DatabaseManager") as MockDB,
+        patch("nemori.api.facade.QdrantVectorStore") as MockQdrant,
+        patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock),
+    ):
         MockDB.return_value = AsyncMock()
         MockQdrant.return_value = MagicMock()
         config = MemoryConfig(dsn="postgresql://localhost/test", llm_api_key="test")
@@ -97,10 +169,13 @@ async def test_add_multimodal_message_builds_content_array():
             memory._system = AsyncMock()
             import base64, io
             from PIL import Image as PILImage
+
             img = PILImage.new("RGB", (10, 10), "red")
             buf = io.BytesIO()
             img.save(buf, format="PNG")
-            data_url = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+            data_url = (
+                f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+            )
 
             await memory.add_multimodal_message(
                 "u1", "Check this image", image_urls=[data_url], compress_images=True
@@ -116,9 +191,11 @@ async def test_add_multimodal_message_builds_content_array():
 @pytest.mark.asyncio
 async def test_add_multimodal_message_text_only_fallback():
     """Without image_urls, add_multimodal_message should add a plain text message."""
-    with patch("nemori.api.facade.DatabaseManager") as MockDB, \
-         patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
-         patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
+    with (
+        patch("nemori.api.facade.DatabaseManager") as MockDB,
+        patch("nemori.api.facade.QdrantVectorStore") as MockQdrant,
+        patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock),
+    ):
         MockDB.return_value = AsyncMock()
         MockQdrant.return_value = MagicMock()
         config = MemoryConfig(dsn="postgresql://localhost/test", llm_api_key="test")

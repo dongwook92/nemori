@@ -1,15 +1,18 @@
 """Nemori quickstart example."""
 import asyncio
+
+from dotenv import load_dotenv
+
 from nemori import NemoriMemory, MemoryConfig
+
+load_dotenv()
 
 
 async def main():
-    # DSN, API keys, and base URLs are resolved from environment variables.
-    # Only model names need to be specified explicitly.
-    config = MemoryConfig(
-        llm_model="openai/gpt-4.1-mini",
-        embedding_model="google/gemini-embedding-001",
-    )
+    # Credentials, endpoints, and the embedding model are resolved from the
+    # environment. Keep the buffer below its auto-processing threshold so the
+    # explicit flush below is deterministic.
+    config = MemoryConfig(buffer_size_min=10)
 
     async with NemoriMemory(config=config) as memory:
         health = await memory.health()

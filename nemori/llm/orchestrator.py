@@ -1,4 +1,5 @@
 """Unified LLM call orchestration with retry, concurrency, and budget."""
+
 from __future__ import annotations
 
 import asyncio
@@ -41,9 +42,7 @@ class LLMRequest:
     response_format: dict[str, str] | None = None
     timeout: float = 30.0
     retries: int = 3
-    metadata: Mapping[str, Any] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass
@@ -77,6 +76,8 @@ class LLMOrchestrator:
         max_concurrent: int = 10,
         token_budget: int | None = None,
         logger: logging.Logger | None = None,
+        tracer: Any | None = None,
+        trace_attributes: Mapping[str, Any] | None = None,
     ) -> None:
         self._provider = provider
         self._default_model = default_model
@@ -91,10 +92,48 @@ class LLMOrchestrator:
         self._total_latency_ms = 0.0
         self._requests_by_phase: dict[str, int] = {}
         self._tokens_by_phase: dict[str, int] = {}
+        self._tracer = tracer
+        self._trace_attributes = dict(trace_attributes or {})
         # Enable usage tracking if provider explicitly declares support
         self._track_usage = getattr(provider, "supports_usage_tracking", False)
 
     async def execute(self, request: LLMRequest) -> LLMResponse:
+        model = request.model or self._default_model
+        request_id = str(uuid.uuid4())[:8]
+        if self._tracer is None:
+            return await self._execute(request, model, request_id)
+
+        phase = str(request.metadata.get("generator", "unknown"))
+        attributes: dict[str, Any] = {
+            "openinference.span.kind": "CHAIN",
+            "nemori.llm.phase": phase,
+            "nemori.llm.model": model,
+            "nemori.llm.request_id": request_id,
+            "nemori.llm.max_retries": request.retries,
+            **self._trace_attributes,
+        }
+        user_id = request.metadata.get("user_id")
+        if isinstance(user_id, str):
+            attributes["nemori.user_id"] = user_id
+
+        with self._tracer.start_as_current_span(
+            f"nemori.llm.{phase}", attributes=attributes
+        ) as span:
+            response = await self._execute(request, model, request_id, span)
+            span.set_attribute("nemori.llm.prompt_tokens", response.usage.prompt_tokens)
+            span.set_attribute(
+                "nemori.llm.completion_tokens", response.usage.completion_tokens
+            )
+            span.set_attribute("nemori.llm.latency_ms", response.latency_ms)
+            return response
+
+    async def _execute(
+        self,
+        request: LLMRequest,
+        model: str,
+        request_id: str,
+        span: Any | None = None,
+    ) -> LLMResponse:
         if self._token_budget and self._total_tokens >= self._token_budget:
             raise TokenBudgetExceeded(
                 "Token budget exceeded",
@@ -102,8 +141,6 @@ class LLMOrchestrator:
                 budget=self._token_budget,
             )
 
-        model = request.model or self._default_model
-        request_id = str(uuid.uuid4())[:8]
         last_error: Exception | None = None
 
         for attempt in range(request.retries):
@@ -125,7 +162,8 @@ class LLMOrchestrator:
                     if self._track_usage:
                         result = await asyncio.wait_for(
                             self._provider.complete_with_usage(
-                                list(request.messages), **call_kwargs,
+                                list(request.messages),
+                                **call_kwargs,
                             ),
                             timeout=request.timeout,
                         )
@@ -137,7 +175,8 @@ class LLMOrchestrator:
                     else:
                         content = await asyncio.wait_for(
                             self._provider.complete(
-                                list(request.messages), **call_kwargs,
+                                list(request.messages),
+                                **call_kwargs,
                             ),
                             timeout=request.timeout,
                         )
@@ -152,8 +191,12 @@ class LLMOrchestrator:
 
                 # Track per-phase stats from metadata
                 phase = request.metadata.get("generator", "unknown")
-                self._requests_by_phase[phase] = self._requests_by_phase.get(phase, 0) + 1
-                self._tokens_by_phase[phase] = self._tokens_by_phase.get(phase, 0) + usage.total
+                self._requests_by_phase[phase] = (
+                    self._requests_by_phase.get(phase, 0) + 1
+                )
+                self._tokens_by_phase[phase] = (
+                    self._tokens_by_phase.get(phase, 0) + usage.total
+                )
 
                 response = LLMResponse(
                     content=content,
@@ -164,7 +207,8 @@ class LLMOrchestrator:
                 )
                 self._log.debug(
                     "LLM request %s completed in %.0fms",
-                    request_id, latency,
+                    request_id,
+                    latency,
                 )
                 return response
 
@@ -173,15 +217,29 @@ class LLMOrchestrator:
             except Exception as e:
                 last_error = e
                 self._total_errors += 1
+                if span is not None:
+                    span.add_event(
+                        "nemori.llm.attempt_failed",
+                        attributes={
+                            "attempt": attempt + 1,
+                            "error.type": type(e).__name__,
+                            "will_retry": attempt < request.retries - 1,
+                        },
+                    )
                 if attempt < request.retries - 1:
-                    delay = min(1.0 * (2 ** attempt) + random.uniform(0, 0.5), 30.0)
+                    delay = min(1.0 * (2**attempt) + random.uniform(0, 0.5), 30.0)
                     self._log.warning(
                         "LLM request %s attempt %d failed: %s. Retrying in %.1fs",
-                        request_id, attempt + 1, e, delay,
+                        request_id,
+                        attempt + 1,
+                        e,
+                        delay,
                     )
                     await asyncio.sleep(delay)
 
-        raise LLMError(f"All {request.retries} attempts failed: {last_error}") from last_error
+        raise LLMError(
+            f"All {request.retries} attempts failed: {last_error}"
+        ) from last_error
 
     async def execute_batch(self, requests: list[LLMRequest]) -> list[LLMResponse]:
         tasks = [self.execute(req) for req in requests]

@@ -1,9 +1,43 @@
 """Tests for LLMOrchestrator."""
+
 import pytest
 import asyncio
 from unittest.mock import AsyncMock
 from nemori.llm.orchestrator import LLMOrchestrator, LLMRequest, LLMResponse, TokenUsage
 from nemori.domain.exceptions import LLMError, TokenBudgetExceeded
+
+
+class _RecordingSpan:
+    def __init__(self):
+        self.attributes = {}
+        self.events = []
+
+    def set_attribute(self, key, value):
+        self.attributes[key] = value
+
+    def add_event(self, name, attributes=None):
+        self.events.append((name, attributes or {}))
+
+
+class _SpanContext:
+    def __init__(self, span):
+        self.span = span
+
+    def __enter__(self):
+        return self.span
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _RecordingTracer:
+    def __init__(self):
+        self.spans = []
+
+    def start_as_current_span(self, name, attributes):
+        span = _RecordingSpan()
+        self.spans.append((name, attributes, span))
+        return _SpanContext(span)
 
 
 @pytest.fixture
@@ -35,6 +69,7 @@ async def test_execute_simple_request(orchestrator, mock_provider):
 @pytest.mark.asyncio
 async def test_execute_retries_on_error(mock_provider):
     call_count = 0
+
     async def flaky_complete(messages, **kwargs):
         nonlocal call_count
         call_count += 1
@@ -68,7 +103,9 @@ async def test_concurrency_limit():
     provider.complete = slow_complete
     provider.supports_usage_tracking = False
     orch = LLMOrchestrator(provider=provider, default_model="m", max_concurrent=2)
-    requests = [LLMRequest(messages=({"role": "user", "content": f"{i}"},)) for i in range(5)]
+    requests = [
+        LLMRequest(messages=({"role": "user", "content": f"{i}"},)) for i in range(5)
+    ]
     await orch.execute_batch(requests)
     assert max_active <= 2
 
@@ -102,6 +139,7 @@ async def test_usage_tracking_with_provider():
     orch = LLMOrchestrator(provider=provider, default_model="gpt-4o-mini")
 
     from types import MappingProxyType
+
     request = LLMRequest(
         messages=({"role": "user", "content": "hi"},),
         metadata=MappingProxyType({"generator": "episode"}),
@@ -130,21 +168,28 @@ async def test_per_phase_tracking():
     orch = LLMOrchestrator(provider=provider, default_model="gpt-4o-mini")
 
     from types import MappingProxyType
+
     # Simulate episode generation (1 call)
-    await orch.execute(LLMRequest(
-        messages=({"role": "user", "content": "hi"},),
-        metadata=MappingProxyType({"generator": "episode"}),
-    ))
+    await orch.execute(
+        LLMRequest(
+            messages=({"role": "user", "content": "hi"},),
+            metadata=MappingProxyType({"generator": "episode"}),
+        )
+    )
     # Simulate semantic prediction (1 call)
-    await orch.execute(LLMRequest(
-        messages=({"role": "user", "content": "predict"},),
-        metadata=MappingProxyType({"generator": "semantic_predict"}),
-    ))
+    await orch.execute(
+        LLMRequest(
+            messages=({"role": "user", "content": "predict"},),
+            metadata=MappingProxyType({"generator": "semantic_predict"}),
+        )
+    )
     # Simulate semantic extraction (1 call)
-    await orch.execute(LLMRequest(
-        messages=({"role": "user", "content": "extract"},),
-        metadata=MappingProxyType({"generator": "semantic_extract"}),
-    ))
+    await orch.execute(
+        LLMRequest(
+            messages=({"role": "user", "content": "extract"},),
+            metadata=MappingProxyType({"generator": "semantic_extract"}),
+        )
+    )
 
     stats = orch.stats
     assert stats.total_requests == 3
@@ -152,3 +197,35 @@ async def test_per_phase_tracking():
     assert stats.requests_by_phase["episode"] == 1
     assert stats.requests_by_phase["semantic_predict"] == 1
     assert stats.requests_by_phase["semantic_extract"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_phase_span_with_usage():
+    provider = AsyncMock()
+    provider.supports_usage_tracking = True
+    provider.complete_with_usage = AsyncMock(
+        return_value=("response", {"prompt_tokens": 12, "completion_tokens": 7})
+    )
+    tracer = _RecordingTracer()
+    orch = LLMOrchestrator(
+        provider=provider,
+        default_model="gpt-test",
+        tracer=tracer,
+        trace_attributes={"nemori.agent_id": "agent-a"},
+    )
+
+    await orch.execute(
+        LLMRequest(
+            messages=({"role": "user", "content": "hi"},),
+            metadata={"generator": "episode", "user_id": "user-a"},
+        )
+    )
+
+    assert len(tracer.spans) == 1
+    name, attributes, span = tracer.spans[0]
+    assert name == "nemori.llm.episode"
+    assert attributes["openinference.span.kind"] == "CHAIN"
+    assert attributes["nemori.agent_id"] == "agent-a"
+    assert attributes["nemori.user_id"] == "user-a"
+    assert span.attributes["nemori.llm.prompt_tokens"] == 12
+    assert span.attributes["nemori.llm.completion_tokens"] == 7

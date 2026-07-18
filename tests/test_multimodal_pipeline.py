@@ -419,9 +419,11 @@ class TestFacadeAddMessagesMultimodal:
         """Calling add_messages with a content list creates a Message with list content."""
         with patch("nemori.api.facade.DatabaseManager") as MockDB, \
              patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
+             patch("nemori.api.facade.AsyncEmbeddingClient") as MockEmbedding, \
              patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
             MockDB.return_value = AsyncMock()
             MockQdrant.return_value = MagicMock()
+            MockEmbedding.return_value.warmup = AsyncMock(return_value=1536)
 
             from nemori.api.facade import NemoriMemory
             from nemori.config import MemoryConfig
@@ -444,9 +446,11 @@ class TestFacadeAddMessagesMultimodal:
         """Multimodal message with explicit timestamp is preserved."""
         with patch("nemori.api.facade.DatabaseManager") as MockDB, \
              patch("nemori.api.facade.QdrantVectorStore") as MockQdrant, \
+             patch("nemori.api.facade.AsyncEmbeddingClient") as MockEmbedding, \
              patch("nemori.api.facade.NemoriMemory._build_system", new_callable=AsyncMock):
             MockDB.return_value = AsyncMock()
             MockQdrant.return_value = MagicMock()
+            MockEmbedding.return_value.warmup = AsyncMock(return_value=1536)
 
             from nemori.api.facade import NemoriMemory
             from nemori.config import MemoryConfig

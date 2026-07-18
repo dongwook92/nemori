@@ -25,11 +25,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("e2e_test")
 
 TEST_CONFIG = MemoryConfig(
-    llm_model="openai/gpt-4.1-mini",
-    embedding_model="google/gemini-embedding-001",
+    llm_model=os.getenv("LLM_MODEL") or "qwen3.6-27b-fp8",
+    embedding_model=os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small",
     agent_id="e2e_test",
-    buffer_size_min=1,
+    buffer_size_min=50,
     buffer_size_max=50,
+    batch_threshold=5,
     episode_min_messages=1,
     episode_max_messages=50,
     enable_semantic_memory=True,
@@ -131,7 +132,7 @@ async def test_multimodal_pipeline(memory):
         {"role": "user", "content": "Thanks! I love the balcony especially."},
     ])
 
-    # Wait for background processing (add_messages may auto-trigger with buffer_size_min=1)
+    # Drain any background processing, then explicitly flush buffered messages.
     system = memory._ensure_system()
     await system.drain(timeout=60.0)
 

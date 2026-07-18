@@ -1,15 +1,21 @@
 """Core memory system orchestrator (async)."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from collections import OrderedDict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nemori.config import MemoryConfig
 from nemori.db.connection import DatabaseManager
 from nemori.db.qdrant_store import QdrantVectorStore
-from nemori.domain.interfaces import EpisodeStore, SemanticStore, MessageBufferStore, EmbeddingProvider
+from nemori.domain.interfaces import (
+    EpisodeStore,
+    SemanticStore,
+    MessageBufferStore,
+    EmbeddingProvider,
+)
 from nemori.domain.models import Message, Episode, SemanticMemory
 from nemori.llm.orchestrator import LLMOrchestrator
 from nemori.llm.generators.episode import EpisodeGenerator
@@ -18,6 +24,9 @@ from nemori.llm.generators.segmenter import BatchSegmenter
 from nemori.llm.generators.merger import EpisodeMerger
 from nemori.search.unified import UnifiedSearch, SearchMethod, SearchResult
 from nemori.services.event_bus import EventBus
+
+if TYPE_CHECKING:
+    from nemori.observability import PhoenixTracing
 
 logger = logging.getLogger("nemori")
 
@@ -43,6 +52,7 @@ class MemorySystem:
         search: UnifiedSearch,
         merger: EpisodeMerger | None = None,
         qdrant: QdrantVectorStore | None = None,
+        tracing: PhoenixTracing | None = None,
     ) -> None:
         self._config = config
         self._agent_id = agent_id
@@ -58,6 +68,7 @@ class MemorySystem:
         self._search = search
         self._merger = merger
         self._qdrant = qdrant
+        self._tracing = tracing
 
         self._user_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
         self._tasks: set[asyncio.Task] = set()
@@ -77,7 +88,7 @@ class MemorySystem:
         """Add messages to the buffer. Triggers processing if buffer is ready."""
         await self._buffer_store.push(user_id, self._agent_id, messages)
         count = await self._buffer_store.count_unprocessed(user_id, self._agent_id)
-        if count >= self._config.buffer_size_min:
+        if count >= self._config.buffer_size_min:  # 2
             task = asyncio.create_task(self._process(user_id))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
@@ -88,6 +99,21 @@ class MemorySystem:
 
     async def _process(self, user_id: str) -> list[Episode]:
         """Process buffered messages into episodes."""
+        if self._tracing is None:
+            return await self._process_buffer(user_id)
+
+        with self._tracing.tenant_context(user_id, self._agent_id):
+            with self._tracing.start_span(
+                "nemori.process",
+                {
+                    "nemori.agent_id": self._agent_id,
+                    "nemori.user_id": user_id,
+                },
+            ):
+                return await self._process_buffer(user_id)
+
+    async def _process_buffer(self, user_id: str) -> list[Episode]:
+        """Process buffered messages inside an optional trace context."""
         async with self._get_lock(user_id):
             messages = await self._buffer_store.get_unprocessed(user_id, self._agent_id)
             if not messages:
@@ -108,7 +134,7 @@ class MemorySystem:
                 and len(messages) >= self._config.batch_threshold
             ):
                 segmenter = BatchSegmenter(orchestrator=self._orchestrator)
-                groups = await segmenter.segment(messages)
+                groups = await segmenter.segment(messages, user_id=user_id)
             else:
                 groups = [{"messages": messages, "topic": "conversation"}]
 
@@ -118,8 +144,11 @@ class MemorySystem:
                 if len(group_msgs) < self._config.episode_min_messages:
                     continue
 
-                episode = await self._episode_gen.generate(
-                    user_id, self._agent_id, group_msgs, group.get("topic", "conversation")
+                episode: Episode = await self._episode_gen.generate(
+                    user_id,
+                    self._agent_id,
+                    group_msgs,
+                    group.get("topic", "conversation"),
                 )
                 await self._episode_store.save(episode)
 
@@ -131,21 +160,32 @@ class MemorySystem:
 
                 # Check for merge
                 if self._merger:
-                    merged, merged_ep, old_id = await self._merger.check_and_merge(episode, self._agent_id)
+                    merged, merged_ep, old_id = await self._merger.check_and_merge(
+                        episode, self._agent_id
+                    )
                     if merged and merged_ep and old_id:
                         # Delete old target episode from PG and Qdrant
-                        await self._episode_store.delete(old_id, user_id, self._agent_id)
+                        await self._episode_store.delete(
+                            old_id, user_id, self._agent_id
+                        )
                         if self._qdrant:
-                            self._qdrant.delete_episode(old_id)
+                            self._qdrant.delete_episode(old_id, user_id, self._agent_id)
                         # Delete original episode (replaced by merged)
-                        await self._episode_store.delete(episode.id, user_id, self._agent_id)
+                        await self._episode_store.delete(
+                            episode.id, user_id, self._agent_id
+                        )
                         if self._qdrant:
-                            self._qdrant.delete_episode(episode.id)
+                            self._qdrant.delete_episode(
+                                episode.id, user_id, self._agent_id
+                            )
                         await self._episode_store.save(merged_ep)
                         # Upsert merged episode vector
                         if self._qdrant and merged_ep.embedding:
                             self._qdrant.upsert_episode(
-                                merged_ep.id, user_id, self._agent_id, merged_ep.embedding
+                                merged_ep.id,
+                                user_id,
+                                self._agent_id,
+                                merged_ep.embedding,
                             )
                         episode = merged_ep  # Use merged episode for downstream
 
@@ -157,7 +197,9 @@ class MemorySystem:
 
             # Mark processed messages as done (deletes them)
             if buffer_ids:
-                await self._buffer_store.mark_processed(user_id, self._agent_id, buffer_ids)
+                await self._buffer_store.mark_processed(
+                    user_id, self._agent_id, buffer_ids
+                )
 
             return episodes
 
@@ -168,14 +210,18 @@ class MemorySystem:
             existing_sem: list[SemanticMemory] = []
             if self._qdrant and episode.embedding:
                 hits = self._qdrant.search_semantic(
-                    user_id, self._agent_id, episode.embedding,
+                    user_id,
+                    self._agent_id,
+                    episode.embedding,
                     top_k=self._config.search_top_k_semantic,
                 )
                 ids = [h["id"] for h in hits]
                 if ids:
-                    existing_sem = await self._semantic_store.get_batch(ids, user_id, self._agent_id)
+                    existing_sem = await self._semantic_store.get_batch(
+                        ids, user_id, self._agent_id
+                    )
 
-            memories = await self._semantic_gen.generate(
+            memories: list[SemanticMemory] = await self._semantic_gen.generate(
                 user_id, self._agent_id, episode, existing_sem
             )
             if memories:
@@ -189,7 +235,8 @@ class MemorySystem:
                             )
                 logger.info(
                     "Generated %d semantic memories for user %s",
-                    len(memories), user_id,
+                    len(memories),
+                    user_id,
                 )
         except Exception as e:
             logger.error("Semantic generation failed for user %s: %s", user_id, e)
@@ -214,12 +261,12 @@ class MemorySystem:
     async def delete_episode(self, user_id: str, episode_id: str) -> None:
         await self._episode_store.delete(episode_id, user_id, self._agent_id)
         if self._qdrant:
-            self._qdrant.delete_episode(episode_id)
+            self._qdrant.delete_episode(episode_id, user_id, self._agent_id)
 
     async def delete_semantic(self, user_id: str, memory_id: str) -> None:
         await self._semantic_store.delete(memory_id, user_id, self._agent_id)
         if self._qdrant:
-            self._qdrant.delete_semantic(memory_id)
+            self._qdrant.delete_semantic(memory_id, user_id, self._agent_id)
 
     async def delete_user(self, user_id: str) -> None:
         await self._semantic_store.delete_by_user(user_id, self._agent_id)
@@ -231,7 +278,9 @@ class MemorySystem:
     async def stats(self, user_id: str) -> dict[str, Any]:
         episodes = await self._episode_store.list_by_user(user_id, self._agent_id)
         semantics = await self._semantic_store.list_by_user(user_id, self._agent_id)
-        buffer_count = await self._buffer_store.count_unprocessed(user_id, self._agent_id)
+        buffer_count = await self._buffer_store.count_unprocessed(
+            user_id, self._agent_id
+        )
         return {
             "user_id": user_id,
             "agent_id": self._agent_id,
@@ -262,3 +311,5 @@ class MemorySystem:
         errors = await self._event_bus.drain(timeout=max(1.0, timeout / 2))
         for err in errors:
             logger.error("Background task failed: %s", err)
+        if self._tracing is not None:
+            await asyncio.to_thread(self._tracing.force_flush)

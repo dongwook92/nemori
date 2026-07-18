@@ -1,7 +1,10 @@
 """Async NemoriMemory public interface."""
+
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import suppress
 from datetime import datetime
 from typing import Any
 
@@ -27,30 +30,43 @@ class NemoriMemory:
         self._qdrant: QdrantVectorStore | None = None
 
     async def __aenter__(self) -> NemoriMemory:
-        self._db = DatabaseManager()
-        await self._db.init(
-            self._config.dsn,
-            min_size=self._config.db_pool_min,
-            max_size=self._config.db_pool_max,
+        embedding = AsyncEmbeddingClient(
+            api_key=self._config.embedding_api_key,
+            model=self._config.embedding_model,
+            base_url=self._config.embedding_base_url,
+            default_headers=self._config.embedding_headers,
+        )
+        warmup_task = asyncio.create_task(
+            embedding.warmup(
+                timeout=self._config.embedding_warmup_timeout,
+                retries=self._config.embedding_warmup_retries,
+            )
         )
 
-        # Probe embedding dimension (let it detect native dimension, no truncation)
+        self._db = DatabaseManager()
         try:
-            embedding = AsyncEmbeddingClient(
-                api_key=self._config.embedding_api_key,
-                model=self._config.embedding_model,
-                base_url=self._config.embedding_base_url,
-                default_headers=self._config.embedding_headers,
+            await self._db.init(
+                self._config.dsn,
+                min_size=self._config.db_pool_min,
+                max_size=self._config.db_pool_max,
             )
-            actual_dim = await embedding.probe_dimension()
-            if actual_dim != self._config.embedding_dimension:
-                logger.info(
-                    "Embedding dimension probe: %d (config was %d), adjusting",
-                    actual_dim, self._config.embedding_dimension,
-                )
-                self._config.embedding_dimension = actual_dim
-        except Exception as e:
-            logger.warning("Embedding dimension probe failed: %s. Using config value %d", e, self._config.embedding_dimension)
+            actual_dim = await warmup_task
+        except BaseException:
+            if not warmup_task.done():
+                warmup_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await warmup_task
+            await self._db.close()
+            self._db = None
+            raise
+
+        if actual_dim != self._config.embedding_dimension:
+            logger.info(
+                "Embedding warm-up detected dimension %d (config was %d), adjusting",
+                actual_dim,
+                self._config.embedding_dimension,
+            )
+            self._config.embedding_dimension = actual_dim
 
         # Run PostgreSQL migrations
         migrations = get_migrations(self._config.embedding_dimension)
@@ -78,13 +94,16 @@ class NemoriMemory:
 
     async def _build_system(self) -> MemorySystem:
         from nemori.factory import create_memory_system
-        assert self._db is not None
-        assert self._qdrant is not None
+
+        if self._db is None or self._qdrant is None:
+            raise RuntimeError("NemoriMemory storage is not initialized")
         return await create_memory_system(self._config, self._db, self._qdrant)
 
     def _ensure_system(self) -> MemorySystem:
         if self._system is None:
-            raise RuntimeError("NemoriMemory not initialized. Use 'async with' context manager.")
+            raise RuntimeError(
+                "NemoriMemory not initialized. Use 'async with' context manager."
+            )
         return self._system
 
     async def add_multimodal_message(
@@ -111,6 +130,7 @@ class NemoriMemory:
             for url in image_urls:
                 if compress_images:
                     from nemori.utils.image import compress_image_for_llm
+
                     url = compress_image_for_llm(url)
                 content.append({"type": "image_url", "image_url": {"url": url}})
             msg_dict: dict[str, Any] = {"role": role, "content": content}
@@ -133,9 +153,13 @@ class NemoriMemory:
                     try:
                         ts = datetime.fromisoformat(ts)
                     except ValueError as e:
-                        raise ValueError(f"Invalid timestamp format in message: {ts!r}") from e
+                        raise ValueError(
+                            f"Invalid timestamp format in message: {ts!r}"
+                        ) from e
                 elif not isinstance(ts, datetime):
-                    raise TypeError(f"timestamp must be str or datetime, got {type(ts).__name__}")
+                    raise TypeError(
+                        f"timestamp must be str or datetime, got {type(ts).__name__}"
+                    )
                 kwargs["timestamp"] = ts
             if "metadata" in m:
                 kwargs["metadata"] = m["metadata"]
@@ -164,7 +188,8 @@ class NemoriMemory:
         }
         method = method_map.get(search_method, SearchMethod.HYBRID)
         result = await system.search(
-            user_id, query,
+            user_id,
+            query,
             top_k_episodes=top_k_episodes,
             top_k_semantic=top_k_semantic,
             method=method,

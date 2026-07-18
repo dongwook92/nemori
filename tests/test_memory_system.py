@@ -1,6 +1,8 @@
 """Tests for async MemorySystem."""
+
 import pytest
 import asyncio
+from contextlib import nullcontext
 from unittest.mock import AsyncMock, MagicMock
 from nemori.core.memory_system import MemorySystem
 from nemori.domain.models import Message, Episode, SemanticMemory
@@ -55,7 +57,9 @@ async def test_flush_processes_buffer(system, deps):
         Message(role="user", content="hello", metadata={"buffer_id": 1}),
         Message(role="assistant", content="hi", metadata={"buffer_id": 2}),
     ]
-    ep = Episode(user_id="u1", title="T", content="C", source_messages=[], embedding=[0.1] * 10)
+    ep = Episode(
+        user_id="u1", title="T", content="C", source_messages=[], embedding=[0.1] * 10
+    )
     deps["episode_generator"].generate = AsyncMock(return_value=ep)
 
     result = await system.flush("u1")
@@ -75,7 +79,14 @@ async def test_search_delegates(system, deps):
 async def test_delete_episode(system, deps):
     await system.delete_episode("u1", "ep-1")
     deps["episode_store"].delete.assert_called_once_with("ep-1", "u1", "default")
-    deps["qdrant"].delete_episode.assert_called_once_with("ep-1")
+    deps["qdrant"].delete_episode.assert_called_once_with("ep-1", "u1", "default")
+
+
+@pytest.mark.asyncio
+async def test_delete_semantic_scopes_qdrant_delete_to_tenant(system, deps):
+    await system.delete_semantic("u1", "mem-1")
+    deps["semantic_store"].delete.assert_called_once_with("mem-1", "u1", "default")
+    deps["qdrant"].delete_semantic.assert_called_once_with("mem-1", "u1", "default")
 
 
 @pytest.mark.asyncio
@@ -90,3 +101,23 @@ async def test_delete_user(system, deps):
 @pytest.mark.asyncio
 async def test_drain(system):
     await system.drain(timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_process_propagates_tenant_trace_context_and_flushes(deps):
+    tracing = MagicMock()
+    tracing.tenant_context.return_value = nullcontext()
+    tracing.start_span.return_value = nullcontext()
+    tracing.force_flush.return_value = True
+    deps["buffer_store"].get_unprocessed.return_value = []
+    traced_system = MemorySystem(**deps, tracing=tracing)
+
+    await traced_system.flush("user-a")
+    await traced_system.drain(timeout=1.0)
+
+    tracing.tenant_context.assert_called_once_with("user-a", "default")
+    tracing.start_span.assert_called_once_with(
+        "nemori.process",
+        {"nemori.agent_id": "default", "nemori.user_id": "user-a"},
+    )
+    tracing.force_flush.assert_called_once()

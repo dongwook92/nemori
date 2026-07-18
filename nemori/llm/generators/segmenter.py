@@ -1,4 +1,5 @@
 """Batch message segmentation into episodes."""
+
 from __future__ import annotations
 
 import json
@@ -21,26 +22,37 @@ class BatchSegmenter:
     def __init__(self, orchestrator: LLMOrchestrator) -> None:
         self._orchestrator = orchestrator
 
-    async def segment(self, messages: list[Message]) -> list[dict[str, Any]]:
+    async def segment(
+        self,
+        messages: list[Message],
+        user_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Segment messages into groups. Returns list of {messages, topic}.
 
         For large batches (>_SEGMENT_CHUNK_SIZE), splits into chunks and
         segments each chunk independently.
         """
         if len(messages) <= _SEGMENT_CHUNK_SIZE:
-            return await self._segment_chunk(messages, offset=0)
+            return await self._segment_chunk(messages, offset=0, user_id=user_id)
 
         # Split into manageable chunks and segment each
         all_groups: list[dict[str, Any]] = []
         for start in range(0, len(messages), _SEGMENT_CHUNK_SIZE):
             chunk = messages[start : start + _SEGMENT_CHUNK_SIZE]
-            groups = await self._segment_chunk(chunk, offset=start)
+            groups = await self._segment_chunk(chunk, offset=start, user_id=user_id)
             all_groups.extend(groups)
 
-        return all_groups if all_groups else [{"messages": messages, "topic": "conversation"}]
+        return (
+            all_groups
+            if all_groups
+            else [{"messages": messages, "topic": "conversation"}]
+        )
 
     async def _segment_chunk(
-        self, messages: list[Message], offset: int = 0
+        self,
+        messages: list[Message],
+        offset: int = 0,
+        user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Segment a single chunk of messages."""
         formatted_lines = []
@@ -62,7 +74,10 @@ class BatchSegmenter:
             temperature=0.2,
             max_tokens=4096,
             response_format={"type": "json_object"},
-            metadata={"generator": "segmenter"},
+            metadata={
+                "generator": "segmenter",
+                **({"user_id": user_id} if user_id is not None else {}),
+            },
         )
 
         try:
@@ -80,7 +95,9 @@ class BatchSegmenter:
                 if group_messages:
                     groups.append({"messages": group_messages, "topic": topic})
 
-            return groups if groups else [{"messages": messages, "topic": "conversation"}]
+            return (
+                groups if groups else [{"messages": messages, "topic": "conversation"}]
+            )
 
         except Exception as e:
             logger.warning("Segmentation failed, returning single group: %s", e)

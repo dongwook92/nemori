@@ -50,6 +50,11 @@ eval = [
     "spacy>=3.8.14",
 ]
 
+tracing = [
+    "arize-phoenix-otel>=0.16.1",
+    "openinference-instrumentation-openai>=0.1.52",
+]
+
 [project.urls]
 Homepage = "https://github.com/nemori-ai/nemori"
 Documentation = "https://github.com/nemori-ai/nemori#readme"

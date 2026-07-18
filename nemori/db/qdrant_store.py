@@ -1,4 +1,5 @@
 """Qdrant vector store for episode and semantic memory embeddings."""
+
 from __future__ import annotations
 
 import logging
@@ -11,6 +12,7 @@ from qdrant_client.models import (
     VectorParams,
     Filter,
     FieldCondition,
+    HasIdCondition,
     MatchValue,
 )
 
@@ -27,7 +29,9 @@ class QdrantVectorStore:
         api_key: str | None = None,
         collection_prefix: str = "nemori",
     ) -> None:
-        self._client = QdrantClient(url=url, port=port, api_key=api_key, check_compatibility=False)
+        self._client = QdrantClient(
+            url=url, port=port, api_key=api_key, check_compatibility=False
+        )
         self._prefix = collection_prefix
         self._episodes_collection = f"{collection_prefix}_episodes"
         self._semantic_collection = f"{collection_prefix}_semantic"
@@ -80,10 +84,16 @@ class QdrantVectorStore:
         )
         return [{"id": str(r.id), "score": r.score} for r in results.points]
 
-    def delete_episode(self, episode_id: str) -> None:
+    def delete_episode(self, episode_id: str, user_id: str, agent_id: str) -> None:
         self._client.delete(
             collection_name=self._episodes_collection,
-            points_selector=[episode_id],
+            points_selector=Filter(
+                must=[
+                    HasIdCondition(has_id=[episode_id]),
+                    FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                    FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                ]
+            ),
         )
 
     def delete_episodes_by_user(self, user_id: str, agent_id: str) -> None:
@@ -129,10 +139,16 @@ class QdrantVectorStore:
         )
         return [{"id": str(r.id), "score": r.score} for r in results.points]
 
-    def delete_semantic(self, memory_id: str) -> None:
+    def delete_semantic(self, memory_id: str, user_id: str, agent_id: str) -> None:
         self._client.delete(
             collection_name=self._semantic_collection,
-            points_selector=[memory_id],
+            points_selector=Filter(
+                must=[
+                    HasIdCondition(has_id=[memory_id]),
+                    FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                    FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                ]
+            ),
         )
 
     def delete_semantic_by_user(self, user_id: str, agent_id: str) -> None:

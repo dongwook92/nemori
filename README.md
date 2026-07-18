@@ -35,13 +35,15 @@ The result is a compact, queryable memory fabric that stays faithful to the sour
 
 ### 2.1 🐳 Infrastructure (Docker Compose)
 
-Nemori uses PostgreSQL for metadata and text search, and Qdrant for vector storage. Start both with a single command:
+Nemori uses PostgreSQL for metadata and text search, Qdrant for vector storage,
+and Phoenix for optional LLM tracing. Start all three with a single command:
 
 ```bash
 docker compose up -d
 ```
 
-This launches PostgreSQL 16 (port 5432) and Qdrant (ports 6333/6334) with persistent volumes.
+This launches PostgreSQL 16 (port 5432), Qdrant (ports 6333/6334), and Phoenix
+18.1.0 (UI/OTLP HTTP on port 6006, OTLP gRPC on port 4317) with persistent volumes.
 
 ### 2.2 📥 Install Nemori
 
@@ -57,6 +59,9 @@ uv venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
 uv sync
+
+# Or include optional Phoenix/OpenInference tracing support
+uv sync --extra tracing
 ```
 
 Alternatively, install in editable mode:
@@ -82,6 +87,22 @@ EMBEDDING_BASE_URL=https://openrouter.ai/api/v1
 ```
 
 Nemori only reads these variables; it never writes secrets to disk. 🔒
+
+To enable local LLM tracing, add:
+
+```bash
+NEMORI_ENABLE_LLM_TRACING=true
+PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006/v1/traces
+PHOENIX_PROJECT_NAME=nemori
+OPENINFERENCE_HIDE_INPUTS=true
+OPENINFERENCE_HIDE_OUTPUTS=true
+OPENINFERENCE_HIDE_EMBEDDINGS_VECTORS=true
+OPENINFERENCE_HIDE_EMBEDDINGS_TEXT=true
+```
+
+These privacy controls default to `true`; set them to `false` only for trusted,
+local debugging. Docker Compose binds PostgreSQL, Qdrant, and Phoenix ports to
+the loopback interface. Then open the Phoenix UI at <http://localhost:6006>.
 
 ### 2.4 💡 Minimal usage
 
@@ -187,8 +208,10 @@ docker compose up -d
 This brings up:
 - **PostgreSQL 16** on port `5432` (user: `nemori`, password: `nemori`, db: `nemori`)
 - **Qdrant** on ports `6333` (HTTP) and `6334` (gRPC)
+- **Phoenix 18.1.0** on port `6006` (UI/OTLP HTTP) and `4317` (OTLP gRPC)
 
-Data is persisted in Docker volumes (`nemori_pg_data`, `nemori_qdrant_data`).
+Data is persisted in Docker volumes (`nemori_pg_data`, `nemori_qdrant_data`,
+`nemori_phoenix_data`).
 
 To stop:
 

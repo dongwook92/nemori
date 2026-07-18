@@ -1,4 +1,5 @@
 """Episode merger for consolidating similar episodes."""
+
 from __future__ import annotations
 
 import json
@@ -48,7 +49,9 @@ class EpisodeMerger:
                 return False, None, None
 
             # 2. LLM decides whether to merge
-            should_merge, target_id, reason = await self._decide_merge(episode, candidates)
+            should_merge, target_id, reason = await self._decide_merge(
+                episode, candidates
+            )
             if not should_merge or not target_id:
                 return False, None, None
 
@@ -59,7 +62,12 @@ class EpisodeMerger:
 
             # 4. Generate merged content
             merged = await self._merge_contents(target, episode, agent_id)
-            logger.info("Episode merge: %s + %s -> %s", target.id[:8], episode.id[:8], merged.id[:8])
+            logger.info(
+                "Episode merge: %s + %s -> %s",
+                target.id[:8],
+                episode.id[:8],
+                merged.id[:8],
+            )
             return True, merged, target.id
 
         except Exception as e:
@@ -74,7 +82,7 @@ class EpisodeMerger:
             episode.user_id, agent_id, episode.embedding, self._merge_top_k + 1
         )
         # Filter out self and fetch full records from PostgreSQL
-        ids = [r["id"] for r in results if r["id"] != episode.id][:self._merge_top_k]
+        ids = [r["id"] for r in results if r["id"] != episode.id][: self._merge_top_k]
         if not ids:
             return []
         return await self._episode_store.get_batch(ids, episode.user_id, agent_id)
@@ -84,7 +92,11 @@ class EpisodeMerger:
     ) -> tuple[bool, str | None, str]:
         """Use LLM to decide if merging is appropriate."""
         candidates_text = self._format_candidates(candidates)
-        ts = new_episode.created_at.strftime("%Y-%m-%d %H:%M:%S") if new_episode.created_at else "unknown"
+        ts = (
+            new_episode.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            if new_episode.created_at
+            else "unknown"
+        )
         new_time_range = f"{ts} ({len(new_episode.source_messages)} messages)"
 
         prompt = PromptTemplates.get_merge_decision_prompt(
@@ -95,7 +107,10 @@ class EpisodeMerger:
         request = LLMRequest(
             messages=({"role": "user", "content": prompt},),
             response_format={"type": "json_object"},
-            metadata={"generator": "merge_decision"},
+            metadata={
+                "generator": "merge_decision",
+                "user_id": new_episode.user_id,
+            },
         )
         response = await self._orchestrator.execute(request)
         parsed = self._parse_json(response.content)
@@ -109,8 +124,16 @@ class EpisodeMerger:
         self, target: Episode, new_episode: Episode, agent_id: str
     ) -> Episode:
         """Generate merged episode content via LLM."""
-        target_ts = target.created_at.strftime("%Y-%m-%d %H:%M:%S") if target.created_at else "unknown"
-        new_ts = new_episode.created_at.strftime("%Y-%m-%d %H:%M:%S") if new_episode.created_at else "unknown"
+        target_ts = (
+            target.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            if target.created_at
+            else "unknown"
+        )
+        new_ts = (
+            new_episode.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            if new_episode.created_at
+            else "unknown"
+        )
 
         prompt = PromptTemplates.get_merge_content_prompt(
             original_time_range=f"{target_ts} ({len(target.source_messages)} messages)",
@@ -124,7 +147,10 @@ class EpisodeMerger:
         request = LLMRequest(
             messages=({"role": "user", "content": prompt},),
             response_format={"type": "json_object"},
-            metadata={"generator": "merge_content"},
+            metadata={
+                "generator": "merge_content",
+                "user_id": new_episode.user_id,
+            },
         )
         response = await self._orchestrator.execute(request)
         parsed = self._parse_json(response.content)
@@ -173,7 +199,11 @@ class EpisodeMerger:
     def _format_candidates(self, candidates: list[Episode]) -> str:
         lines = []
         for i, ep in enumerate(candidates, 1):
-            ts = ep.created_at.strftime("%Y-%m-%d %H:%M:%S") if ep.created_at else "unknown"
+            ts = (
+                ep.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                if ep.created_at
+                else "unknown"
+            )
             lines.append(
                 f"{i}. Candidate ID: {ep.id}\n"
                 f"   Time: {ts} ({len(ep.source_messages)} messages)\n"

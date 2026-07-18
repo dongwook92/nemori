@@ -1,4 +1,5 @@
 """Factory for assembling MemorySystem components."""
+
 from __future__ import annotations
 
 from nemori.config import MemoryConfig
@@ -12,6 +13,7 @@ from nemori.llm.orchestrator import LLMOrchestrator
 from nemori.llm.generators.episode import EpisodeGenerator
 from nemori.llm.generators.semantic import SemanticGenerator
 from nemori.llm.generators.merger import EpisodeMerger
+from nemori.observability import setup_phoenix_tracing
 from nemori.services.embedding import AsyncEmbeddingClient
 from nemori.services.event_bus import EventBus
 from nemori.search.unified import UnifiedSearch
@@ -26,6 +28,8 @@ async def create_memory_system(
     semantic_store = PgSemanticStore(db)
     buffer_store = PgMessageBufferStore(db)
 
+    tracing = setup_phoenix_tracing(config)
+
     llm_client = AsyncLLMClient(
         api_key=config.llm_api_key,
         base_url=config.llm_base_url,
@@ -35,6 +39,8 @@ async def create_memory_system(
         default_model=config.llm_model,
         max_concurrent=config.llm_max_concurrent,
         token_budget=config.llm_token_budget,
+        tracer=tracing.tracer if tracing else None,
+        trace_attributes={"nemori.agent_id": config.agent_id},
     )
     embedding = AsyncEmbeddingClient(
         api_key=config.embedding_api_key,
@@ -48,14 +54,18 @@ async def create_memory_system(
         embedding=embedding,
         enable_prediction_correction=config.enable_prediction_correction,
     )
-    merger = EpisodeMerger(
-        orchestrator=orchestrator,
-        embedding=embedding,
-        episode_store=episode_store,
-        qdrant=qdrant,
-        similarity_threshold=config.merge_similarity_threshold,
-        merge_top_k=config.merge_top_k,
-    ) if config.enable_episode_merging else None
+    merger = (
+        EpisodeMerger(
+            orchestrator=orchestrator,
+            embedding=embedding,
+            episode_store=episode_store,
+            qdrant=qdrant,
+            similarity_threshold=config.merge_similarity_threshold,
+            merge_top_k=config.merge_top_k,
+        )
+        if config.enable_episode_merging
+        else None
+    )
     event_bus = EventBus()
     search = UnifiedSearch(episode_store, semantic_store, embedding, qdrant)
 
@@ -74,4 +84,5 @@ async def create_memory_system(
         agent_id=config.agent_id,
         merger=merger,
         qdrant=qdrant,
+        tracing=tracing,
     )

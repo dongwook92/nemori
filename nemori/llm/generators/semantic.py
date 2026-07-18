@@ -1,4 +1,5 @@
 """Semantic memory extraction from episodes."""
+
 from __future__ import annotations
 
 import json
@@ -49,9 +50,11 @@ class SemanticGenerator:
     ) -> list[SemanticMemory]:
         try:
             if self._enable_pc and existing_semantics:
-                statements = await self._prediction_correction(episode, existing_semantics)
+                statements = await self._prediction_correction(
+                    user_id, episode, existing_semantics
+                )
             else:
-                statements = await self._direct_extraction(episode)
+                statements = await self._direct_extraction(user_id, episode)
 
             if not statements:
                 return []
@@ -60,14 +63,16 @@ class SemanticGenerator:
             memories = []
             for stmt in statements:
                 emb = await self._embedding.embed(stmt)
-                memories.append(SemanticMemory(
-                    user_id=user_id,
-                    content=stmt,
-                    memory_type=self._classify_type(stmt),
-                    agent_id=agent_id,
-                    embedding=emb,
-                    source_episode_id=episode.id,
-                ))
+                memories.append(
+                    SemanticMemory(
+                        user_id=user_id,
+                        content=stmt,
+                        memory_type=self._classify_type(stmt),
+                        agent_id=agent_id,
+                        embedding=emb,
+                        source_episode_id=episode.id,
+                    )
+                )
             return memories
 
         except Exception as e:
@@ -75,18 +80,19 @@ class SemanticGenerator:
             return []
 
     async def _prediction_correction(
-        self, episode: Episode, existing: list[SemanticMemory]
+        self,
+        user_id: str,
+        episode: Episode,
+        existing: list[SemanticMemory],
     ) -> list[str]:
         """Two-step: predict from knowledge, then extract deltas."""
         knowledge = [s.content for s in existing]
 
         # Step 1: Predict
-        predict_prompt = PromptTemplates.get_prediction_prompt(
-            episode.title, knowledge
-        )
+        predict_prompt = PromptTemplates.get_prediction_prompt(episode.title, knowledge)
         predict_req = LLMRequest(
             messages=({"role": "user", "content": predict_prompt},),
-            metadata={"generator": "semantic_predict"},
+            metadata={"generator": "semantic_predict", "user_id": user_id},
         )  # No response_format here — prediction output is free-form text
         predict_resp = await self._orchestrator.execute(predict_req)
 
@@ -95,26 +101,32 @@ class SemanticGenerator:
             f"{m.get('role', 'unknown')}: {_extract_text(m)}"
             for m in episode.source_messages
         )
-        extract_prompt = PromptTemplates.EXTRACT_KNOWLEDGE_FROM_COMPARISON_PROMPT.format(
-            original_messages=original,
-            predicted_episode=predict_resp.content,
+        extract_prompt = (
+            PromptTemplates.EXTRACT_KNOWLEDGE_FROM_COMPARISON_PROMPT.format(
+                original_messages=original,
+                predicted_episode=predict_resp.content,
+            )
         )
         extract_req = LLMRequest(
             messages=({"role": "user", "content": extract_prompt},),
             response_format={"type": "json_object"},
-            metadata={"generator": "semantic_extract"},
+            metadata={"generator": "semantic_extract", "user_id": user_id},
         )
         extract_resp = await self._orchestrator.execute(extract_req)
         return self._parse_statements(extract_resp.content)
 
-    async def _direct_extraction(self, episode: Episode) -> list[str]:
+    async def _direct_extraction(
+        self,
+        user_id: str,
+        episode: Episode,
+    ) -> list[str]:
         """Single-step extraction from episode content."""
         ep_text = f"Episode 1:\nTitle: {episode.title}\nContent: {episode.content}"
         prompt = PromptTemplates.get_semantic_generation_prompt(ep_text)
         req = LLMRequest(
             messages=({"role": "user", "content": prompt},),
             response_format={"type": "json_object"},
-            metadata={"generator": "semantic_direct"},
+            metadata={"generator": "semantic_direct", "user_id": user_id},
         )
         resp = await self._orchestrator.execute(req)
         return self._parse_statements(resp.content)
@@ -125,7 +137,9 @@ class SemanticGenerator:
             text = content.strip()
             if text.startswith("```"):
                 lines = text.split("\n")
-                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+                text = "\n".join(
+                    lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+                )
             data = json.loads(text)
             if not isinstance(data, dict):
                 return []
@@ -141,11 +155,16 @@ class SemanticGenerator:
     def _classify_type(statement: str) -> str:
         """Simple keyword-based classification."""
         lower = statement.lower()
-        if any(w in lower for w in ["name is", "works at", "job", "profession", "role is"]):
+        if any(
+            w in lower for w in ["name is", "works at", "job", "profession", "role is"]
+        ):
             return "identity"
         if any(w in lower for w in ["likes", "prefers", "favorite", "enjoys"]):
             return "preference"
-        if any(w in lower for w in ["family", "friend", "colleague", "partner", "wife", "husband"]):
+        if any(
+            w in lower
+            for w in ["family", "friend", "colleague", "partner", "wife", "husband"]
+        ):
             return "relationship"
         if any(w in lower for w in ["goal", "plan", "wants to", "aims to", "intends"]):
             return "goal"
