@@ -15,10 +15,10 @@ MessageContent = str | list[ContentPart]
 class Message:
     """A single conversation message."""
 
-    role: str
-    content: MessageContent
-    timestamp: datetime = field(default_factory=datetime.now)
-    metadata: dict[str, Any] = field(default_factory=dict)
+    role: str # r_i
+    content: MessageContent # c_i, text, text and vision
+    timestamp: datetime = field(default_factory=datetime.now) # τ_i, temperal reasoning 위함.
+    metadata: dict[str, Any] = field(default_factory=dict) # buffer id 포함
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def text_content(self, include_placeholders: bool = True) -> str:
@@ -79,12 +79,12 @@ class Episode:
     """An episodic memory derived from conversation messages."""
 
     user_id: str
-    title: str
-    content: str
-    source_messages: list[dict[str, Any]]
+    title: str # c_j: episodic cue (검색·예측용 요약)
+    content: str # N_j: 3인칭 내러티브
+    source_messages: list[dict[str, Any]]  # P_j: raw 원문 (dict로 직렬화된 Message들)
     agent_id: str = "default"
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    embedding: list[float] | None = None
+    embedding: list[float] | None = None # v_j = f_emb(title + " " + content)
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -132,12 +132,12 @@ class SemanticMemory:
     """A semantic knowledge fact extracted from episodes."""
 
     user_id: str
-    content: str
-    memory_type: str
+    content: str  # k_q: 원자적 statement
+    memory_type: str # identity/preference/relationship/goal/belief/habit
     agent_id: str = "default"
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     embedding: list[float] | None = None
-    source_episode_id: str | None = None
+    source_episode_id: str | None = None # # 출처 추적 (provenance)
     confidence: float = 1.0
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
